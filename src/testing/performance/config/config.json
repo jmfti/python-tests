@@ -1,0 +1,12 @@
+{
+    "baseline": "20220815_071911",
+    "db_cache": "/tmp/get_testdata",
+    "session_db": "/output/requests.db",
+    "reportee" : "reportee@company.com",
+    "from": "someone@company.loadtesting",
+    "subject": "test results",
+    "smtp_server": "mailhog",
+    "smtp_port": 1025,
+    "signatures_path": "/testdata/signatures.csv",
+    "emails_path": "/testdata/people.csv"
+}

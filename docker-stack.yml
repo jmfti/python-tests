@@ -1,0 +1,198 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: ./images/python/Dockerfile
+      # args:
+      #   requirements: http://source/requirements
+    image: python-app-base
+    ports: 
+      - "81:5000"
+      - "90:8000"
+    #entrypoint: ./src/app/entrypoint.sh
+    entrypoint: /bin/sh entrypoint.sh
+    environment:
+      - ENV_APP_NAME=main
+      - ENV_IS_DEV=1
+      - ENV_DEV_PATH=/
+      - ENVIRONMENT=DEV
+      - WORKERS=4
+    networks:
+      back-tier:
+    volumes:
+      - "./src/app:/app"
+      - ./output/:/output/
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+  mongo:
+    image: mongo:4.0.8
+    container_name: mongodb
+    restart: unless-stopped
+    command: mongod 
+    environment:
+      # MONGO_INITDB_ROOT_USERNAME: mongodbuser
+      # MONGO_INITDB_ROOT_PASSWORD: your_mongodb_root_password
+      # MONGO_INITDB_DATABASE: flaskdb
+      MONGODB_DATA_DIR: /data/db
+      MONDODB_LOG_DIR: /dev/null
+    volumes:
+      - mongodbdata:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      back-tier:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+  tests-all:
+    # build:
+    #   context: ./docker-python
+    #   args:
+    #     requirements: /root/flask-mongodb-example/python/requirements.txt
+    image: python-app-base
+    entrypoint: pytest /app/test # just test all inside /app/test
+    restart: on-failure
+    volumes:
+      - "./src/testing/functional:/app"
+    networks:
+      back-tier:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+      restart_policy:
+        condition: on-failure
+        delay: 60s
+        max_attempts: 50
+        window: 60s
+  
+  loadtests-master:
+    # image: locustio/locust
+    image: locust-with-pandas
+    #entrypoint: locust -f /mnt/locust/meetings_stress.py --headles -u 1000 -r 50
+    entrypoint: locust --config /loadtest/config/master.conf --class-picker
+    # entrypoint: python /loadtest/main.py --config /loadtest/config/master.conf --class-picker
+    #command: --config /app/locust.conf 
+    #entrypoint: "ls -lah /app"
+    environment:
+      - PYTHONPATH=$PYTHONPATH:/loadtest/common
+    volumes:
+      - "./src/testing/performance/:/loadtest/"
+      - "./output/:/output/"
+    ports:
+      - "8089:8089"
+    networks:
+      back-tier:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+      restart_policy:
+        condition: on-failure
+        delay: 60s
+        max_attempts: 15
+        window: 60s
+  
+  loadtests-worker:
+    image: locust-with-pandas
+    #entrypoint: locust -f /mnt/locust/meetings_stress.py --headles -u 1000 -r 50
+    entrypoint: locust --config /loadtest/config/slave.conf
+    #command: --config /app/locust.conf
+    #entrypoint: "ls -lah /app"
+    environment:
+      - PYTHONPATH=$PYTHONPATH:/loadtest/common
+    volumes:
+      - "./src/testing/performance/:/loadtest/"
+      - "./src/testing/performance/data:/testdata"
+      - ./output/:/output/
+    networks:
+      back-tier:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 60s
+        max_attempts: 3
+        window: 60s
+    # sysctls:
+    #   - net.ipv6.conf.all.disable_ipv6=0
+  prometheus:
+    image: prom/prometheus:v2.36.2
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    ports:
+      - 9090:9090
+    networks:
+      back-tier:
+    restart: always
+  
+  # mail:
+  #   image: bytemark/smtp
+  #   restart: always
+  #   networks:
+  #     back-tier:
+  #   environment:
+  #     RELAY_HOST: mail
+  #     RELAY_PORT: 587
+  #     # RELAY_USERNAME: alice@example.com
+  #     # RELAY_PASSWORD: secretpassword
+  #   ports:
+  #     - 587:587
+
+  # mailhog:
+  #   image: mailhog/mailhog
+  #   logging:
+  #     driver: 'none'  # disable saving logs
+  #   ports:
+  #     - 1025:1025 # smtp server
+  #     - 8025:8025 # web ui
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - 3000:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    env_file:
+      - ./grafana/config.monitoring
+    networks:
+      back-tier:
+    user: "472"
+    deploy:
+      restart_policy:
+        condition: on-failure
+  
+  locust-metrics-exporter:
+    image: containersol/locust_exporter
+    ports:
+        - "9646:9646"
+    environment:
+        - LOCUST_EXPORTER_URI=http://loadtests-master:8089
+    networks:
+      back-tier:
+networks:
+  back-tier:
+    external: true
+    name: app_net
+
+volumes:
+  prometheus_data: {}
+  grafana_data: {}
+  mongodbdata: {}

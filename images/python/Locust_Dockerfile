@@ -1,0 +1,3 @@
+FROM locustio/locust
+
+RUN pip install pandas pymc3 scipy scikit-learn statsmodels tabulate pymongo cachetools pyquery
