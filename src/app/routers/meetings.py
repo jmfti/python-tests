@@ -7,10 +7,7 @@ import hashlib
 from pydantic import BaseModel
 import pprint
 import fastapi 
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import HTTPException
-from fastapi import status
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 # from fastapi.logger import logger
 import logging
 from fastapi.encoders import jsonable_encoder
@@ -21,6 +18,10 @@ from bson.objectid import ObjectId
 from config import get_config
 import re
 from asyncache import cached
+from utils import Repository
+import cachetools 
+
+
 
 import shelve
 
@@ -75,18 +76,19 @@ async def read_meetings(limit: Optional[int] = 1000, offset: Optional[int] = 0) 
     Returns:
         List[Meeting]: a list of meetings
     """
+    
     logger.info("trying to get all meetings")
-    meetings_cursor = meetings_async.find().limit(limit).skip(offset)
-    meetings_list = await meetings_cursor.to_list(limit)
-    lista = list(map(meeting_mongo_map, meetings_list))#[meeting_mongo_map(i) for i in meetings_list]
-    if len(lista) == 0:
-        raise HTTPException(status_code=404, detail="No elements in database")
-    return lista
+    repository: Repository = get_repository()
+    items = await repository.get({}, limit, offset)
+    if items:
+        return list(map(meeting_mongo_map, items))
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No elements in database found")
+
 
 @REQUEST_TIME.time()
 @router.get("/find/{field}/{value}", response_description="Find meetings by field", status_code=status.HTTP_200_OK, response_model=List[Meeting])
 @caches(cache_meetings_find, "value")
-async def find_meetings(field: str, value: str) -> GenericResponse:
+async def find_meetings(field: str, value: str, response: Response) -> List[Meeting]:
     """_summary_
 
     Args:
@@ -97,25 +99,25 @@ async def find_meetings(field: str, value: str) -> GenericResponse:
         HTTPException: not found
 
     Returns:
-        List[Meeting]: list of meetings
+        List[Meeting]: a list of meetings
     """
-    logger.info(f"searching elements with field {field} and value {value}")
     if field == "id":
         field = "_id"
     if field == "people" and not re.match(".+\@.+", value):
         raise HTTPException(status_code = 400, detail="Bad request: input is email but doesn't match pattern")
-    data = await meetings_async.find({
-        field: { "$in": [value] }
-    }).to_list(length=1000)
-    if len(data) == 0:
-        raise HTTPException(status_code = 404, detail="No elements in database")
-    logger.info(str(data[0]['people']))
-    return list(map(meeting_mongo_map, data))
+    logger.info(f"searching elements with field {field} and value {value}")
+    repository: Repository = get_repository()
+    items = await repository.get({field: value}, 1000, 0)
+    if items:
+        return list(map(meeting_mongo_map, items))
+    response.status_code = status.HTTP_404_NOT_FOUND
+    return []
+
 
 @REQUEST_TIME.time()
 @router.get("/{id}", response_description="Get a meeting by its ID", status_code=status.HTTP_200_OK, response_model=Meeting)
 @cached(cache_meetings_by_id)
-async def find_meeting_by_id(id: str) -> Meeting:
+async def find_meeting_by_id(id: str, response: Response) -> Meeting:
     """get a meeting by its id
 
     Args:
@@ -128,14 +130,13 @@ async def find_meeting_by_id(id: str) -> Meeting:
         Meeting: an element containing all the information of the meeting
     """
     logger.info(f"finding element by id {id}")
-    data = await meetings_async.find_one({"_id": ObjectId(id)})
-    if data is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if "id" in data:
-        data["id"] = str(data["id"])
-    meeting: Meeting = meeting_mongo_map(data)
-    logger.info(f"found {meeting.json()}")
-    return meeting
+    repository: Repository = get_repository()
+    item = await repository.get_by_id(id)
+    if item:
+        meeting = meeting_mongo_map(item)
+        return meeting
+    response.status_code = 404
+    return {}
 
 @REQUEST_TIME.time()
 @router.post("/", response_description="Create a new meeting", status_code=status.HTTP_201_CREATED, response_model=GenericResponse)
@@ -143,30 +144,28 @@ async def save_meeting(meeting: Meeting) -> GenericResponse:
     """saves a meeting
 
     Args:
-        meeting (Meeting): _description_
+        meeting (Meeting): an element containing all the information of the meeting
 
     Raises:
-        HTTPException: _description_
+        HTTPException: internal server error 500
 
     Returns:
-        Dict: _description_
+        GenericResponse: a generic response with information about the operation
     """
     # if meeting.id is not None:
     #     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="can't set a non null meeting_id")
     meeting.id = None
     logger.info("attempting to save " + meeting.json())
-    
-    data = None
+    repository: Repository = get_repository()
     try:
-        data = meeting.dict()
-        logger.info(f"attempting to save {meeting.json()}")
-        res = await meetings_async.insert_one(data)
-        id = str(res.inserted_id)
-        response = GenericResponse(status=200, message=f"Created {id}", data=[])
-        return response
+        res = await repository.insert(meeting.dict())
+        logger.info(str(res))
+        return GenericResponse(status=201, message=f"Created {res.inserted_id}", data=[meeting.dict()])
     except Exception as e:
-        logger.debug(traceback.format_exc())
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{str(e)}")
+        logger.error(e)
+        logger.exception(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error saving meeting")
+        
 
 @REQUEST_TIME.time()
 @router.put("/{id}", response_description="Update a meeting", status_code=status.HTTP_200_OK, response_model=GenericResponse)
@@ -184,12 +183,10 @@ async def update_meeting(id: str, data: Dict) -> GenericResponse:
         Meeting: _description_
     """
     logger.info(f"updating element {id}")
-    meeting_orig: Meeting = await meetings_async.find_one({"_id": ObjectId(id)})
-    
-    if meeting_orig is None:
-        raise HTTPException(status_code=404, detail="Meeting not found")
-    await meetings_async.update_one({"_id": id}, {"$set": data})
-    response = GenericResponse(status=200, message="Updated", data=[])
+    repository: Repository = get_repository()
+    res = await repository.upsert(id, data)
+    if res:
+        return GenericResponse(status=200, message="Updated", data=[res])
 
 
 def meeting_mongo_map(meeting):
@@ -216,6 +213,28 @@ def meeting_mongo_map(meeting):
 @REQUEST_TIME.time()
 @router.delete("/{id}", response_description="Delete a meeting by its ID", status_code=status.HTTP_200_OK, response_model=GenericResponse)
 async def delete_by_id(id: str) -> GenericResponse:
+    """deletes a meeting
+
+    Args:
+        id (str): id
+
+    Raises:
+        HTTPException: a
+
+    Returns:
+        Meeting: GenericResponse
+    """
     logger.info(f"deleting element {id}")
-    res = await meetings_async.delete_one({"_id": ObjectId(id)})
-    return GenericResponse(status=200, message="deleted", data=[])
+    repository: Repository = get_repository()
+    item = await repository.get_by_id(id)
+    if item:
+        repository.delete(id)
+        cache_meetings_by_id.popitem(id)
+        return GenericResponse(status=200, message="deleted", data=[])
+    return GenericResponse(status=404, message="not found", data=[])
+    # res = await meetings_async.delete_one({"_id": ObjectId(id)})
+
+
+@cachetools.cached({})
+def get_repository():
+    return Repository("demo_meetings")

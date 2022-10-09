@@ -2,6 +2,7 @@
     "mongo_host": "mongo",
     "mongo_port": 27017,
     "meetings_collection_name": "meetings",
+    "database_name": "meetings_stack",
     "meetings_cache_size": 1000,
     "meetings_cache_ttl": 43200
 }

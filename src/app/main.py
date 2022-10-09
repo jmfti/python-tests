@@ -14,6 +14,7 @@ from starlette_prometheus import metrics, PrometheusMiddleware
 import random, os
 from prometheus_client import start_http_server
 from routers.metrics_controller import set_metrics_gen_status
+from common.utils import Repository
 
 
 cfg = get_config()

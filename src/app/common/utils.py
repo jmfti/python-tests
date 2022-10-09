@@ -48,30 +48,38 @@ def read_docker_secret(name: str) -> str:
 class Repository:
     def __init__(self, collection: str):
         cfg: Dict = get_config()
-        self.__db = motor.motor_asyncio.AsyncIOMotorClient(host=cfg.get("mongo_host"), port=cfg.get("mongo_port"))[collection]#pymongo.MongoClient(host=cfg.get("mongo_host"), port=cfg.get("mongo_port"))[collection]
-
+        self.cli = motor.motor_asyncio.AsyncIOMotorClient(
+            host=cfg.get("mongo_host"), 
+            port=cfg.get("mongo_port")
+        )
+        self.db = self.cli[cfg.get("database_name")]
+        self.collection = self.db[collection]
+        
     async def get(self, query: dict, limit: int = 10, offset: int = 0):
-        res = await self.__db.find(query).limit(limit).skip(offset)
-        return list(res)
+        cursor = self.collection.find(query).limit(limit).skip(offset)
+        
+        return await cursor.to_list(limit)
     
     async def get_by_id(self, id: str):
-        res = await self.__db.find_one({"_id": ObjectId(id)})
-        return res
+        res = self.collection.find_one({"_id": ObjectId(id)})
+        return await res
 
     async def upsert(self, key, data: dict):
-        return await self.__db.update_one(
-            {"_id": key}, {"$set": data}, upsert=True
+        return await self.collection.update_one(
+            {"_id": ObjectId(key)}, {"$set": data}, upsert=True
         )
 
+    async def insert(self, data: dict):
+        return await self.collection.insert_one(data)
 
     async def delete(self, key):
-        return await self.__db.delete_one({"_id": key})
+        return await self.collection.delete_one({"_id": key})
 
     async def delete_many(self, index=None, key=None):
         if index and key:
-            return await self.__db.delete_many({index: key})
+            return await self.collection.delete_many({index: key})
         else:
-            return await self.__db.delete_many({})
+            return await self.collection.delete_many({})
 
     async def drop(self):
-        return await self.__db.drop()
+        return await self.collection.drop()

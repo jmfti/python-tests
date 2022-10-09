@@ -18,12 +18,13 @@ import pymongo
 import gevent
 from locust import HttpUser, task, between
 from locust.env import Environment
-from locust.stats import stats_printer, stats_history
+from locust.stats import stats_printer, stats_history, StatsCSV, StatsCSVFileWriter
 from locust.log import setup_logging
 import locust.html
 import pyquery
 import scipy.stats
-
+import csv
+import requests
 
 
 setup_logging("INFO", None)
@@ -190,6 +191,12 @@ response times for last test
         with open("/output/html_report_extended.html", "w") as fd:
             fd.write(html_report.replace("""<div id="tasks">""", f"""{new_panel}<div id="tasks">"""))
         
+        # try to get the csv data from locust
+        # make an http request to http://app:5000/stats/requests/csv and save it to /output/requests.csv
+        data = requests.Session().get("http://app:5000/stats/requests/csv").text
+        with open("/output/requests.csv", "w") as fd:
+            fd.write(data)
+
     logger.info("8. test run stopped")
     
 

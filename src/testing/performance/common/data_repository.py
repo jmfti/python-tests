@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname
 logger = logging.getLogger(__name__)
 
 
-class DataProviderStrategy(collections.Iterator):
+class DataProviderStrategy(collections.abc.Iterator):
 
     def __init__(self, data: List, return_as_dict=False, loop_on_end=True):
         if data is not None and len(data) >= 1:

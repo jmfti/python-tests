@@ -19,6 +19,7 @@ services:
       - ENV_DEV_PATH=/
       - ENVIRONMENT=DEV
       - WORKERS=4
+      - PYTHONPATH=$PYTHONPATH:/app/common
     networks:
       back-tier:
     volumes:
@@ -75,7 +76,7 @@ services:
     # image: locustio/locust
     image: locust-with-pandas
     #entrypoint: locust -f /mnt/locust/meetings_stress.py --headles -u 1000 -r 50
-    entrypoint: locust --config /loadtest/config/master.conf --class-picker
+    entrypoint: locust --config /loadtest/config/master.conf
     # entrypoint: python /loadtest/main.py --config /loadtest/config/master.conf --class-picker
     #command: --config /app/locust.conf 
     #entrypoint: "ls -lah /app"
