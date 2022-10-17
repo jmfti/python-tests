@@ -3,6 +3,7 @@
 cd images/python 
 docker build -f Dockerfile -t python-app-base .
 docker build -f Locust_Dockerfile -t locust-with-pandas .
+docker build -f GeneratorDocker -t python-pyagrum .
 cd ../../
 cd src/app 
 rm -r .pytest_cache
